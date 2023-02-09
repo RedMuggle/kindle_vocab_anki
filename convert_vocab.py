@@ -10,10 +10,10 @@ from operator import attrgetter
 from collections import namedtuple
 
 
-AnkiNote = namedtuple('AnkiNote', 'word usage definition timestamp')
+AnkiNote = namedtuple('AnkiNote', 'word usage definition timestamp num_usages')
 
 
-def get_vocab(vocab_db, _since=0):
+def get_vocab(vocab_db, _since=0, lang='en'):
 
     if isinstance(_since, datetime):
         since = int(_since.timestamp()) * 1000
@@ -29,10 +29,10 @@ def get_vocab(vocab_db, _since=0):
         on WORDS.id = LOOKUPS.word_key
         left join BOOK_INFO
         on BOOK_INFO.id = LOOKUPS.book_key
-        where LOOKUPS.timestamp > ?
+        where WORDS.lang = ? and LOOKUPS.timestamp > ?
         order by WORDS.stem, LOOKUPS.timestamp
     '''
-    rows = cur.execute(sql, (since,)).fetchall()
+    rows = cur.execute(sql, (lang, since,)).fetchall()
     return rows
 
 
@@ -45,8 +45,11 @@ def make_notes(vocab, dict_tsv, include_nodef=False):
 
     stems_no_def = set()
     notes = []
+
+
     # vocab is a list of db rows order by (stem, timestamp)
     for stem, entries in itertools.groupby(vocab, itemgetter('stem')):
+        num_usages = 0
         # Merge multiple usages into one.
         usage_all = ''
         usage_timestamp = None
@@ -56,6 +59,7 @@ def make_notes(vocab, dict_tsv, include_nodef=False):
             usage = f'<blockquote>{_usage}<small>{entry["title"]}</small></blockquote>'
             usage_all += usage
             usage_timestamp = entry['timestamp']
+            num_usages += 1
 
         # Look up definition in dictionary
         try:
@@ -67,7 +71,7 @@ def make_notes(vocab, dict_tsv, include_nodef=False):
             else:
                 continue
 
-        note = AnkiNote(stem, usage_all, definition, usage_timestamp)
+        note = AnkiNote(stem, usage_all, definition, usage_timestamp, num_usages)
         notes.append(note)
 
     if stems_no_def:
@@ -89,12 +93,15 @@ def output_anki_tsv(notes, output, sort=True):
 
 if __name__ == '__main__':
     argp = argparse.ArgumentParser()
+    argp.add_argument('-l', '--lang', default='en', help='language of the words to extract. Only one, i.e.: en, fr, es, jp, etc.')
     argp.add_argument('--since', type=lambda s: datetime.strptime(s, '%Y-%m-%d'), default=datetime.utcfromtimestamp(86400 * 2))  # Windows workaround
     argp.add_argument('--include-nodef', action='store_true', help='include words that have no definitions in dictionary')
     argp.add_argument('vocab_db')
     argp.add_argument('dict_tsv')
     argp.add_argument('anki_tsv', type=argparse.FileType('w', encoding='utf-8'))
     args = argp.parse_args()
-    vocab = get_vocab(args.vocab_db, _since=args.since)
+    vocab = get_vocab(args.vocab_db, _since=args.since, lang=args.lang)
     notes = make_notes(vocab, args.dict_tsv, include_nodef=args.include_nodef)
     output_anki_tsv(notes, args.anki_tsv)
+
+    # TODO: skip known or ignored words (i.e. read them in a file to blacklist them)
